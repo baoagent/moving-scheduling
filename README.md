@@ -255,19 +255,3 @@ CREATE TABLE availability (
 3. **Create demo video** showing the full workflow
 4. **Prepare cost-savings presentation** for moving companies
 5. **Identify 3-5 target companies** for outreach
-
-Would you like me to help you build the actual demo application next?15": {
-          "morning": "available",
-          "afternoon": "booked",
-          "evening": "available"
-        }
-      }
-    }
-  ],
-  "trucks": [
-    {
-      "id": "truck_001",
-      "size": "26ft",
-      "equipment": ["dolly", "straps", "blankets"],
-      "availability": {
-        "2025-07-
