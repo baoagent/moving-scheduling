@@ -1,0 +1,7 @@
+# Backend Virtual Environment
+venv/
+*.pyc
+__pycache__/
+.env
+.DS_Store
+logs/

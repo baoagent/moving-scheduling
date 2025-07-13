@@ -197,7 +197,7 @@ CREATE TABLE availability (
 - Frontend: React (Vite) + Tailwind CSS
 - Backend: Node.js + Express
 - Database: PostgreSQL (local)
-- AI: Ollama + Llama 3.1 (local)
+- AI: vLLM + a few model choices (local)
 
 **Features**:
 - Web form for quote requests
