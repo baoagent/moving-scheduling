@@ -87,24 +87,42 @@ If any required info is missing, ask clarifying questions.
 Respond in JSON format with extracted data and next_action.
 ```
 
+**Data Structure**
+MovingRequest:
+```json
+{
+  "customer_name": "Peter Doe",
+  "contact": 9123456789,
+  "from": "34 empire street, New York, NY, 10038",
+  "to": "88 Flushing Ave, Flushing, NY, 88292",
+  "num_boxes": "20",
+  "large_items": ["bed", "desk", "sofa"],
+  "require_coi": "Yes",
+  "building_type": "walk-up",
+  "special_request": "Parking not avaliable nearby" 
+}
+```
 #### B. Availability Management Service
 **Data Structure**:
 ```json
+Crew
 {
-  "crews": [
-    {
-      "id": "crew_001",
-      "size": 3,
-      "skills": ["piano", "stairs", "long_distance"],
-      "availability": {
-        "2025-07-15": {
-          "morning": "available",
-          "afternoon": "available",
-          "evening": "maintenance"
-        }
-      }
+  "id": 1,
+  "name": "John Smith",
+  "customer_phone": 1234567892,
+  "skills": ["move", "drive"],
+  "availability": {
+    "2025-07-15": {
+      "morning": "available",
+      "afternoon": "booked",
+      "evening": "booked"
+    },
+    "2025-07-16": {
+      "morning": "available",
+      "afternoon": "available",
+      "evening": "booked"
     }
-  ]
+  }
 }
 ```
 
@@ -126,12 +144,12 @@ Respond in JSON format with extracted data and next_action.
 CREATE TABLE jobs (
     id SERIAL PRIMARY KEY,
     customer_name VARCHAR(255) NOT NULL,
-    customer_phone VARCHAR(20) NOT NULL,
+    customer_phone VARCHAR(20),
     customer_email VARCHAR(255),
     origin_address TEXT NOT NULL,
     destination_address TEXT NOT NULL,
     move_date DATE NOT NULL,
-    move_time_slot VARCHAR(20), -- 'morning', 'afternoon', 'evening'
+    move_time_slot VARCHAR(20) NOT NULL, -- 'morning', 'afternoon', 'evening'
     home_size VARCHAR(20) NOT NULL,
     special_items TEXT[],
     estimated_hours INTEGER,
@@ -143,13 +161,12 @@ CREATE TABLE jobs (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Crews table
-CREATE TABLE crews (
+-- Crew table
+CREATE TABLE crew (
     id SERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
-    size INTEGER NOT NULL,
+    location VARCHAR(255),
     skills TEXT[],
-    hourly_rate DECIMAL(10,2)
 );
 
 -- Trucks table
@@ -157,8 +174,8 @@ CREATE TABLE trucks (
     id SERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
     size VARCHAR(20) NOT NULL,
-    equipment TEXT[],
-    daily_rate DECIMAL(10,2)
+    location VARCHAR(255),
+    equipment TEXT[]
 );
 
 -- Availability table
@@ -168,6 +185,7 @@ CREATE TABLE availability (
     resource_id INTEGER NOT NULL,
     date DATE NOT NULL,
     time_slot VARCHAR(20) NOT NULL,
+    location VARCHAR(255) NOT NULL,
     status VARCHAR(20) DEFAULT 'available' -- 'available', 'booked', 'maintenance'
 );
 ```
@@ -206,13 +224,13 @@ CREATE TABLE availability (
 {
   "sample_company": {
     "name": "NYC Quick Movers",
-    "crews": [
-      {"id": 1, "name": "Team Alpha", "size": 3, "skills": ["piano", "stairs"]},
-      {"id": 2, "name": "Team Beta", "size": 2, "skills": ["apartments", "quick"]}
+    "crew": [
+      {"id": 1, "name": "Joe", "location": "123 Water Ave, Hoboken, NJ 18237", "skills": ["driver", "mover"]},
+      {"id": 2, "name": "Bob", "location": "33 Spring Ave, Union City, NJ 28837", "skills": ["mover"]}
     ],
     "trucks": [
-      {"id": 1, "name": "Big Blue", "size": "26ft"},
-      {"id": 2, "name": "Small Red", "size": "16ft"}
+      {"id": 1, "name": "2005 Volvo Supreme", "location": "27 Volvo Drive, Brooklyn, NY 88273", "equipment": ["loading dock"], "size": "26ft"},
+      {"id": 2, "name": "2014 Honda Altius", "location": "88 Porsche Street, Manhattan, NY 18820", "equipment": [], "size": "16ft"}
     ]
   }
 }
