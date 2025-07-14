@@ -1,275 +1,575 @@
-# Moving Company MVP - Technical Architecture (Free/Open Source)
+Free Voice-to-LLM Phone System Implementation Guide (Mac Mini Updated)
+Architecture Overview
+Incoming Call → WebRTC → Audio Stream → STT → LLM → TTS → Audio Response
+Component 1: Phone Interface Layer (FREE) - Mac Compatible
+Solution: Simple WebRTC + WebSocket (No Asterisk needed)
+Why skip Asterisk?
 
-## System Overview
+Asterisk is no longer available on Homebrew for Mac
+Complex installation process on modern macOS
+Overkill for a simple voice-to-LLM system
 
-**Core Value Proposition**: AI-powered scheduling agent that handles inbound leads, books moves, and reduces no-shows through intelligent follow-up sequences.
+Alternative: Direct WebRTC Implementation
+javascript// Pure WebRTC solution - works in any browser
+// No server-side phone system needed
+Component 2: Speech Processing Layer (FREE) - Mac Optimized
+STT Solution: OpenAI Whisper (Local/Free)
+Installation (Mac Mini 16GB):
+bash# Use conda for better Mac compatibility
+brew install miniconda
+conda create -n voice-llm python=3.10
+conda activate voice-llm
 
-## Architecture Components (FREE OPTIONS)
+# Install Whisper with Mac optimizations
+pip install openai-whisper
+pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
 
-### 1. Communication Layer
+# For Apple Silicon Macs (M1/M2/M3)
+export PYTORCH_ENABLE_MPS_FALLBACK=1
+Mac-Optimized STT Implementation:
+python
+
+import whisper
+import numpy as np
+import torch
+import queue
+import threading
+import librosa
+
+class MacOptimizedSTT:
+    def __init__(self, model_size="base"):
+        # Use MPS on Apple Silicon, CPU otherwise
+        if torch.backends.mps.is_available():
+            device = "mps"
+            print("Using Apple Silicon MPS acceleration")
+        else:
+            device = "cpu"
+            print("Using CPU")
+            
+        self.model = whisper.load_model(model_size, device=device)
+        self.audio_buffer = []
+        self.text_callback = None
+        self.min_audio_length = 1.0  # seconds
+        
+    def process_audio_chunk(self, audio_data, sample_rate=16000):
+        """Process incoming audio with simple energy-based VAD"""
+        # Convert to float32 for processing
+        if isinstance(audio_data, np.ndarray):
+            audio_float = audio_data.astype(np.float32) / 32768.0
+        else:
+            audio_array = np.frombuffer(audio_data, dtype=np.int16)
+            audio_float = audio_array.astype(np.float32) / 32768.0
+        
+        # Simple energy-based voice activity detection
+        energy = np.mean(audio_float ** 2)
+        
+        if energy > 0.01:  # Adjust threshold as needed
+            self.audio_buffer.append(audio_float)
+        else:
+            # Silence detected, process accumulated audio
+            if len(self.audio_buffer) > 0:
+                self.transcribe_accumulated()
+    
+    def transcribe_accumulated(self):
+        """Transcribe accumulated audio chunks"""
+        if len(self.audio_buffer) == 0:
+            return
+            
+        # Combine audio chunks
+        combined_audio = np.concatenate(self.audio_buffer)
+        
+        # Check minimum length
+        if len(combined_audio) / 16000 < self.min_audio_length:
+            return
+            
+        try:
+            result = self.model.transcribe(
+                combined_audio,
+                fp16=False,  # Use fp32 for better Mac compatibility
+                language="en",
+                initial_prompt="This is a phone conversation."
+            )
+            
+            if self.text_callback and result["text"].strip():
+                self.text_callback(result["text"].strip())
+                
+        except Exception as e:
+            print(f"Transcription error: {e}")
+        finally:
+            self.audio_buffer = []  # Clear buffer
+TTS Solution: kyutai/tts-1.6b-en_fr (Moshi TTS, Local/Free)
+Installation:
+```bash
+pip install moshi-mlx soundfile
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Phone Calls   │    │   SMS/Text      │    │   Web Form      │
-│   (FREE LIMIT)  │    │   (FREE LIMIT)  │    │   (React)       │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-         │                       │                       │
-         └───────────────────────┼───────────────────────┘
-                                 │
-                    ┌─────────────────┐
-                    │  AI Orchestrator │
-                    │  (Ollama+Llama3)│
-                    └─────────────────┘
+- For Apple Silicon Macs (M1/M2/M3), moshi-mlx uses MLX for hardware acceleration.
+- For Intel Macs or other platforms, see the [delayed-streams-modeling repo](https://github.com/kyutai-labs/delayed-streams-modeling) for PyTorch or Rust options.
+
+Mac-Optimized TTS Implementation (Moshi TTS):
+```python
+import moshi_mlx
+import numpy as np
+import tempfile
+import soundfile as sf
+
+class MacOptimizedTTS:
+    def __init__(self, voice="en-us-amy"):
+        self.voice = voice  # Use a preset voice embedding from kyutai/tts-voices
+        self.sample_rate = 24000  # Moshi TTS default
+
+    def text_to_audio_sync(self, text):
+        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp_file:
+            moshi_mlx.run_inference(
+                text=text,
+                output_path=tmp_file.name,
+                voice=self.voice,
+                quantize=8  # For faster inference
+            )
+            audio_data, _ = sf.read(tmp_file.name, dtype='int16')
+        return audio_data
+
+    def text_to_audio_chunks(self, text, chunk_size=4096):
+        audio_data = self.text_to_audio_sync(text)
+        chunks = []
+        for i in range(0, len(audio_data), chunk_size):
+            chunk = audio_data[i:i + chunk_size]
+            chunks.append(chunk)
+        return chunks
 ```
+- This replaces the previous edge-tts-based implementation.
+- You can select a voice embedding from the [kyutai/tts-voices](https://huggingface.co/kyutai/tts-voices) repository.
+Component 3: LLM Integration Layer (FREE)
+Your existing baoagent-llm-client integration:
+pythonimport sys
+import os
+sys.path.append('/Users/kevinsu/baoagent/baoagent-llm-client')
+from client import create_baoagent_client
 
-### FREE Tech Stack Options
+class VoiceLLMAdapter:
+    def __init__(self):
+        self.client = create_baoagent_client()
+        self.conversation_history = []
+        
+    def process_voice_input(self, text):
+        """Process voice input and return response"""
+        # Add to conversation history
+        self.conversation_history.append({"role": "user", "content": text})
+        
+        # Get response from LLM
+        response = self.client.chat(
+            messages=self.conversation_history,
+            max_tokens=150,  # Keep responses short for voice
+            temperature=0.7,
+            stream=False
+        )
+        
+        # Add response to history
+        self.conversation_history.append({"role": "assistant", "content": response})
+        
+        # Keep history manageable (last 6 messages)
+        if len(self.conversation_history) > 6:
+            self.conversation_history = self.conversation_history[-6:]
+            
+        return response
+Component 4: Audio Pipeline Manager (FREE)
+FastAPI + WebSockets implementation:
+pythonfrom fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.staticfiles import StaticFiles
+import asyncio
+import json
+import base64
+import numpy as np
+import uvicorn
+from concurrent.futures import ThreadPoolExecutor
 
-#### Communication Services
-**Phone/SMS (Free Options)**:
-- **Twilio**: $15 free credits (then $1/month + usage)
-- **Alternative**: TextBelt API (free tier: 1 text/day, then $0.01/text)
-- **Alternative**: Use Google Voice number + automation scripts
-- **Tradeoff**: Limited volume, need to upgrade quickly for real usage
+app = FastAPI()
 
-**Voice Recognition (Free)**:
-- **OpenAI Whisper** (self-hosted, completely free)
-- **Alternative**: Google Speech-to-Text (free tier: 60 minutes/month)
-- **Tradeoff**: Self-hosted requires more setup, cloud has usage limits
+# Serve static files
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
-#### AI Services
-**LLM Options (Free)**:
-- **Ollama + Llama 3.1** (completely free, self-hosted)
-- **Google Gemini**: Free tier (15 requests/minute)
-- **OpenAI**: $5 free credits (then $0.002/1K tokens)
-- **Tradeoff**: Self-hosted requires good hardware, cloud options have usage limits
+class AudioPipelineManager:
+    def __init__(self):
+        self.stt = MacOptimizedSTT()
+        self.tts = MacOptimizedTTS()
+        self.llm = VoiceLLMAdapter()
+        self.active_connections = {}
+        self.executor = ThreadPoolExecutor(max_workers=4)
+        
+    async def handle_websocket(self, websocket: WebSocket):
+        await websocket.accept()
+        connection_id = id(websocket)
+        self.active_connections[connection_id] = {
+            'websocket': websocket,
+            'state': 'listening'
+        }
+        
+        # Setup STT callback
+        self.stt.text_callback = lambda text: asyncio.create_task(
+            self.handle_stt_result(connection_id, text)
+        )
+        
+        try:
+            while True:
+                data = await websocket.receive_text()
+                await self.process_audio_message(connection_id, data)
+        except WebSocketDisconnect:
+            if connection_id in self.active_connections:
+                del self.active_connections[connection_id]
+    
+    async def process_audio_message(self, connection_id, message):
+        if connection_id not in self.active_connections:
+            return
+            
+        conn = self.active_connections[connection_id]
+        websocket = conn['websocket']
+        
+        try:
+            data = json.loads(message)
+            
+            if data['type'] == 'audio':
+                # Decode audio data
+                audio_data = base64.b64decode(data['audio'])
+                audio_array = np.frombuffer(audio_data, dtype=np.int16)
+                
+                # Process with STT in background
+                loop = asyncio.get_event_loop()
+                loop.run_in_executor(
+                    self.executor,
+                    self.stt.process_audio_chunk,
+                    audio_array
+                )
+                
+        except Exception as e:
+            print(f"Error processing audio: {e}")
+    
+    async def handle_stt_result(self, connection_id, text):
+        if connection_id not in self.active_connections:
+            return
+            
+        conn = self.active_connections[connection_id]
+        websocket = conn['websocket']
+        
+        try:
+            if text.strip():
+                conn['state'] = 'processing'
+                
+                # Send transcription to client
+                await websocket.send_text(json.dumps({
+                    'type': 'transcription',
+                    'text': text
+                }))
+                
+                # Process with LLM in background
+                loop = asyncio.get_event_loop()
+                response = await loop.run_in_executor(
+                    self.executor,
+                    self.llm.process_voice_input,
+                    text
+                )
+                
+                # Convert response to audio and stream
+                conn['state'] = 'responding'
+                audio_chunks = await loop.run_in_executor(
+                    self.executor,
+                    self.tts.text_to_audio_chunks,
+                    response
+                )
+                
+                # Send audio chunks
+                for chunk in audio_chunks:
+                    if len(chunk) > 0:
+                        audio_b64 = base64.b64encode(chunk.tobytes()).decode()
+                        await websocket.send_text(json.dumps({
+                            'type': 'audio_response',
+                            'audio': audio_b64
+                        }))
+                
+                conn['state'] = 'listening'
+                
+        except Exception as e:
+            print(f"Error handling STT result: {e}")
 
-#### Database & Backend
-**Database (Free)**:
-- **PostgreSQL** (completely free, self-hosted)
-- **Supabase**: Free tier (50MB database, 50MB storage)
-- **PlanetScale**: Free tier (5GB storage, 1 billion reads/month)
-- **Tradeoff**: Self-hosted requires management, cloud has storage limits
+# Initialize pipeline
+pipeline_manager = AudioPipelineManager()
 
-**Backend Framework (Free)**:
-- **Node.js + Express** (completely free)
-- **Python + FastAPI** (completely free)
-- **Next.js** (completely free)
+@app.websocket("/voice")
+async def voice_websocket(websocket: WebSocket):
+    await pipeline_manager.handle_websocket(websocket)
 
-#### Hosting (Free)**:
-- **Railway**: Free tier ($5/month credit)
-- **Render**: Free tier (750 hours/month)
-- **Vercel**: Free tier (hobby projects)
-- **Fly.io**: Free tier (3 shared VMs)
-- **Tradeoff**: Free tiers have resource limits and may sleep
+@app.get("/")
+async def root():
+    return {"message": "Voice-to-LLM System Running"}
 
-### 2. Core Services
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+Component 5: Frontend (No Asterisk/SIP needed)
+Pure WebRTC Browser Client:
+html<!DOCTYPE html>
+<html>
+<head>
+    <title>Voice-to-LLM Phone (Mac Compatible)</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        .container { max-width: 600px; margin: 0 auto; }
+        .status { padding: 10px; margin: 10px 0; border-radius: 5px; }
+        .listening { background-color: #e8f5e8; }
+        .processing { background-color: #fff3cd; }
+        .responding { background-color: #d4edda; }
+        button { padding: 10px 20px; font-size: 16px; margin: 5px; }
+        #transcription { padding: 10px; background: #f8f9fa; margin: 10px 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Voice-to-LLM Phone System</h1>
+        <button id="startButton">Start Call</button>
+        <button id="stopButton" disabled>Stop Call</button>
+        <div id="status" class="status">Ready</div>
+        <div id="transcription"></div>
+        <audio id="audioPlayer" autoplay></audio>
+    </div>
 
-#### A. Lead Capture & Qualification Service
-**Input**: Phone call, SMS, or web form
-**Process**:
-- Extract key information (date, origin, destination, size)
-- Qualify lead (budget, timeline, special requirements)
-- Determine crew/truck requirements
-- Check availability
+    <script>
+        class VoiceToLLMPhone {
+            constructor() {
+                this.websocket = null;
+                this.mediaRecorder = null;
+                this.audioContext = null;
+                this.isRecording = false;
+                this.audioChunks = [];
+                
+                this.startButton = document.getElementById('startButton');
+                this.stopButton = document.getElementById('stopButton');
+                this.status = document.getElementById('status');
+                this.transcription = document.getElementById('transcription');
+                
+                this.setupEventListeners();
+            }
+            
+            setupEventListeners() {
+                this.startButton.addEventListener('click', () => this.startCall());
+                this.stopButton.addEventListener('click', () => this.stopCall());
+            }
+            
+            updateStatus(message, className = 'listening') {
+                this.status.textContent = message;
+                this.status.className = `status ${className}`;
+            }
+            
+            async startCall() {
+                try {
+                    this.updateStatus('Connecting...', 'processing');
+                    
+                    // Connect to WebSocket
+                    this.websocket = new WebSocket('ws://localhost:8000/voice');
+                    
+                    this.websocket.onopen = () => {
+                        this.updateStatus('Connected - Starting audio capture...', 'processing');
+                        this.startAudioCapture();
+                    };
+                    
+                    this.websocket.onmessage = (event) => {
+                        const data = JSON.parse(event.data);
+                        this.handleServerMessage(data);
+                    };
+                    
+                    this.websocket.onclose = () => {
+                        this.updateStatus('Disconnected', 'processing');
+                        this.stopCall();
+                    };
+                    
+                    this.websocket.onerror = (error) => {
+                        this.updateStatus('Connection error', 'processing');
+                        console.error('WebSocket error:', error);
+                    };
+                    
+                } catch (error) {
+                    this.updateStatus('Failed to start call', 'processing');
+                    console.error('Error starting call:', error);
+                }
+            }
+            
+            async startAudioCapture() {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ 
+                        audio: {
+                            sampleRate: 16000,
+                            channelCount: 1,
+                            echoCancellation: true,
+                            noiseSuppression: true
+                        }
+                    });
+                    
+                    this.audioContext = new AudioContext({ sampleRate: 16000 });
+                    const source = this.audioContext.createMediaStreamSource(stream);
+                    
+                    // Create script processor for real-time audio
+                    const processor = this.audioContext.createScriptProcessor(4096, 1, 1);
+                    
+                    processor.onaudioprocess = (e) => {
+                        if (this.isRecording) {
+                            const inputBuffer = e.inputBuffer.getChannelData(0);
+                            const audioData = new Int16Array(inputBuffer.length);
+                            
+                            // Convert float32 to int16
+                            for (let i = 0; i < inputBuffer.length; i++) {
+                                audioData[i] = Math.max(-1, Math.min(1, inputBuffer[i])) * 0x7FFF;
+                            }
+                            
+                            // Send to server
+                            if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+                                this.websocket.send(JSON.stringify({
+                                    type: 'audio',
+                                    audio: btoa(String.fromCharCode(...new Uint8Array(audioData.buffer)))
+                                }));
+                            }
+                        }
+                    };
+                    
+                    source.connect(processor);
+                    processor.connect(this.audioContext.destination);
+                    
+                    this.isRecording = true;
+                    this.startButton.disabled = true;
+                    this.stopButton.disabled = false;
+                    this.updateStatus('Listening...', 'listening');
+                    
+                } catch (error) {
+                    this.updateStatus('Microphone access denied', 'processing');
+                    console.error('Error accessing microphone:', error);
+                }
+            }
+            
+            handleServerMessage(data) {
+                switch(data.type) {
+                    case 'transcription':
+                        this.transcription.innerHTML = `<strong>You said:</strong> ${data.text}`;
+                        this.updateStatus('Processing...', 'processing');
+                        break;
+                    case 'audio_response':
+                        this.updateStatus('AI responding...', 'responding');
+                        this.playAudio(data.audio);
+                        break;
+                }
+            }
+            
+            playAudio(audioB64) {
+                try {
+                    const audioData = atob(audioB64);
+                    const audioArray = new Uint8Array(audioData.length);
+                    for (let i = 0; i < audioData.length; i++) {
+                        audioArray[i] = audioData.charCodeAt(i);
+                    }
+                    
+                    const audioBlob = new Blob([audioArray], { type: 'audio/wav' });
+                    const audioUrl = URL.createObjectURL(audioBlob);
+                    
+                    const audio = new Audio(audioUrl);
+                    audio.play();
+                    
+                    audio.onended = () => {
+                        this.updateStatus('Listening...', 'listening');
+                        URL.revokeObjectURL(audioUrl);
+                    };
+                    
+                } catch (error) {
+                    console.error('Error playing audio:', error);
+                    this.updateStatus('Listening...', 'listening');
+                }
+            }
+            
+            stopCall() {
+                this.isRecording = false;
+                
+                if (this.websocket) {
+                    this.websocket.close();
+                    this.websocket = null;
+                }
+                
+                if (this.audioContext) {
+                    this.audioContext.close();
+                    this.audioContext = null;
+                }
+                
+                this.startButton.disabled = false;
+                this.stopButton.disabled = true;
+                this.updateStatus('Ready', 'listening');
+            }
+        }
+        
+        // Initialize the phone system
+        const phone = new VoiceToLLMPhone();
+    </script>
+</body>
+</html>
+Mac Mini Setup Instructions
+1. Install Dependencies
+bash# Install system dependencies
+brew install miniconda python3
 
-**AI Prompt Framework (for Llama 3.1)**:
-```
-You are a moving company booking assistant. Extract these details:
-- Moving date (required)
-- Origin address (required)
-- Destination address (required)
-- Home size (studio, 1BR, 2BR, 3BR, 4BR+)
-- Special items (piano, artwork, fragile items)
-- Budget range
-- Preferred time window
-- Contact information
+# Create virtual environment
+conda create -n voice-llm python=3.10
+conda activate voice-llm
 
-If any required info is missing, ask clarifying questions.
-Respond in JSON format with extracted data and next_action.
-```
+# Install Python packages (Mac-compatible versions)
+pip install fastapi uvicorn websockets
+pip install openai-whisper torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+pip install moshi-mlx soundfile
+pip install numpy scipy librosa
+pip install python-multipart
 
-**Data Structure**
-MovingRequest:
-```json
-{
-  "customer_name": "Peter Doe",
-  "contact": 9123456789,
-  "from": "34 empire street, New York, NY, 10038",
-  "to": "88 Flushing Ave, Flushing, NY, 88292",
-  "num_boxes": "20",
-  "large_items": ["bed", "desk", "sofa"],
-  "require_coi": "Yes",
-  "building_type": "walk-up",
-  "special_request": "Parking not avaliable nearby" 
-}
-```
-#### B. Availability Management Service
-**Data Structure**:
-```json
-Crew
-{
-  "id": 1,
-  "name": "John Smith",
-  "customer_phone": 1234567892,
-  "skills": ["move", "drive"],
-  "availability": {
-    "2025-07-15": {
-      "morning": "available",
-      "afternoon": "booked",
-      "evening": "booked"
-    },
-    "2025-07-16": {
-      "morning": "available",
-      "afternoon": "available",
-      "evening": "booked"
-    }
-  }
-}
-```
+# For M1/M2/M3 Macs, enable MPS
+export PYTORCH_ENABLE_MPS_FALLBACK=1
 
-#### C. Booking Confirmation Service
-**Free Email Options**:
-- **Nodemailer + Gmail SMTP** (free for personal use)
-- **EmailJS** (free tier: 200 emails/month)
-- **Resend**: Free tier (100 emails/month)
+# Add your baoagent-llm-client to path
+export PYTHONPATH="/Users/kevinsu/baoagent/baoagent-llm-client:$PYTHONPATH"
+2. Create Project Structure
+bashmkdir voice-llm-system
+cd voice-llm-system
 
-**SMS Options**:
-- **TextBelt**: Free tier (1 text/day, then $0.01/text)
-- **46elks**: Free trial credits
-- **Tradeoff**: Very limited free SMS, need paid service for real usage
+# Create directories
+mkdir static templates
 
-### 3. Database Schema (PostgreSQL)
+# Save the HTML file as static/index.html
+# Save the Python code as voice_pipeline.py
+3. Run the System
+bash# Terminal 1: Start your LLM server
+cd /Users/kevinsu/baoagent/baoagent-llm-server
+./scripts/start_server.sh
 
-```sql
--- Jobs table
-CREATE TABLE jobs (
-    id SERIAL PRIMARY KEY,
-    customer_name VARCHAR(255) NOT NULL,
-    customer_phone VARCHAR(20),
-    customer_email VARCHAR(255),
-    origin_address TEXT NOT NULL,
-    destination_address TEXT NOT NULL,
-    move_date DATE NOT NULL,
-    move_time_slot VARCHAR(20) NOT NULL, -- 'morning', 'afternoon', 'evening'
-    home_size VARCHAR(20) NOT NULL,
-    special_items TEXT[],
-    estimated_hours INTEGER,
-    estimated_cost DECIMAL(10,2),
-    status VARCHAR(20) DEFAULT 'pending', -- 'pending', 'confirmed', 'completed', 'cancelled'
-    assigned_crew_id INTEGER,
-    assigned_truck_id INTEGER,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+# Terminal 2: Start voice pipeline
+cd voice-llm-system
+conda activate voice-llm
+export PYTHONPATH="/Users/kevinsu/baoagent/baoagent-llm-client:$PYTHONPATH"
+python voice_pipeline.py
+4. Access the System
+Open browser to: http://localhost:8000/static/index.html
+Mac Mini 16GB Optimizations
+Memory Management
 
--- Crew table
-CREATE TABLE crew (
-    id SERIAL PRIMARY KEY,
-    name VARCHAR(255) NOT NULL,
-    location VARCHAR(255),
-    skills TEXT[],
-);
+Whisper: Use "base" model (74MB) instead of "large" (1550MB)
+edge-tts: Lightweight, no local model storage needed
+LLM: Configure baoagent server with 7B parameter models
 
--- Trucks table
-CREATE TABLE trucks (
-    id SERIAL PRIMARY KEY,
-    name VARCHAR(255) NOT NULL,
-    size VARCHAR(20) NOT NULL,
-    location VARCHAR(255),
-    equipment TEXT[]
-);
+Performance Settings
+python# Add to voice_pipeline.py
+import torch
+import os
 
--- Availability table
-CREATE TABLE availability (
-    id SERIAL PRIMARY KEY,
-    resource_type VARCHAR(20) NOT NULL, -- 'crew' or 'truck'
-    resource_id INTEGER NOT NULL,
-    date DATE NOT NULL,
-    time_slot VARCHAR(20) NOT NULL,
-    location VARCHAR(255) NOT NULL,
-    status VARCHAR(20) DEFAULT 'available' -- 'available', 'booked', 'maintenance'
-);
-```
+# Mac-specific optimizations
+if torch.backends.mps.is_available():
+    os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
+    print("Using Apple Silicon MPS acceleration")
 
-### 4. MVP Implementation Plan
+# Memory management
+torch.set_num_threads(4)  # Optimize for Mac Mini CPU cores
+Key Benefits of This Updated Solution
 
-#### Phase 1: Basic Web Demo (Week 1-2)
-**Tech Stack**:
-- Frontend: React (Vite) + Tailwind CSS
-- Backend: Node.js + Express
-- Database: PostgreSQL (local)
-- AI: vLLM + a few model choices (local)
+No Asterisk dependency: Uses pure WebRTC in browser
+Mac-compatible packages: All packages work on modern macOS
+Apple Silicon optimized: Uses MPS acceleration where available
+Simpler architecture: Fewer moving parts, easier to debug
+Better performance: Optimized for Mac Mini's capabilities
+No external dependencies: Everything runs locally
 
-**Features**:
-- Web form for quote requests
-- Simple availability checker
-- Basic crew/truck assignment logic
-- Email confirmations
-
-#### Phase 2: SMS Integration (Week 3)
-**Add**:
-- TextBelt integration for SMS
-- Simple SMS bot for booking confirmation
-- Customer can text to confirm/reschedule
-
-#### Phase 3: Voice Integration (Week 4)
-**Add**:
-- Basic phone number (Google Voice)
-- Whisper for speech-to-text
-- Text-to-speech for responses
-
-### 5. Demo Strategy
-
-#### A. Sample Data Setup
-```json
-{
-  "sample_company": {
-    "name": "NYC Quick Movers",
-    "crew": [
-      {"id": 1, "name": "Joe", "location": "123 Water Ave, Hoboken, NJ 18237", "skills": ["driver", "mover"]},
-      {"id": 2, "name": "Bob", "location": "33 Spring Ave, Union City, NJ 28837", "skills": ["mover"]}
-    ],
-    "trucks": [
-      {"id": 1, "name": "2005 Volvo Supreme", "location": "27 Volvo Drive, Brooklyn, NY 88273", "equipment": ["loading dock"], "size": "26ft"},
-      {"id": 2, "name": "2014 Honda Altius", "location": "88 Porsche Street, Manhattan, NY 18820", "equipment": [], "size": "16ft"}
-    ]
-  }
-}
-```
-
-#### B. Demo Script
-1. **Show incoming lead** (web form or SMS)
-2. **AI extracts info** and suggests crew/truck
-3. **Check availability** in real-time
-4. **Send confirmation** via email/SMS
-5. **Show follow-up sequence** (24hr, 48hr reminders)
-
-### 6. Cost Breakdown
-
-#### Completely Free Option (Local Development)
-- **Compute**: Your laptop (Ollama + Llama 3.1)
-- **Database**: PostgreSQL (local)
-- **Email**: Gmail SMTP (free)
-- **SMS**: TextBelt (1 free/day)
-- **Total**: $0/month
-
-#### Minimal Paid Option (Production Ready)
-- **Hosting**: Railway ($5/month credit covers small usage)
-- **Database**: Supabase free tier
-- **AI**: OpenAI ($5 free credits, then ~$10/month)
-- **SMS**: TextBelt ($0.01/text after free tier)
-- **Total**: ~$15/month for light usage
-
-#### Upgrade Path
-- **Phone**: Twilio ($15 setup + $1/month + usage)
-- **SMS**: Twilio ($0.0075/SMS)
-- **Hosting**: Railway/Render ($20-50/month)
-- **AI**: OpenAI ($50-100/month with volume)
-- **Total**: $100-200/month for real business usage
-
-### 7. Next Steps
-
-1. **Build local demo** with sample data
-2. **Test with mock scenarios** (different home sizes, special requirements)
-3. **Create demo video** showing the full workflow
-4. **Prepare cost-savings presentation** for moving companies
-5. **Identify 3-5 target companies** for outreach
+This updated implementation removes the problematic Asterisk dependency and uses reliable, Mac-compatible packages while maintaining all the functionality of a voice-to-LLM phone system.
