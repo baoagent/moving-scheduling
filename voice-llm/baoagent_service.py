@@ -25,11 +25,8 @@ class BaoAgentService:
         if not self.stt_warmed_up:
             print("Warming up STT model...")
             try:
-                # Create a dummy audio file (1 second of silence)
-                with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp_file:
-                    silence = np.zeros(16000, dtype=np.int16)  # 1 second of silence at 16kHz
-                    sf.write(tmp_file.name, silence, 16000)
-                    dummy_audio_path = tmp_file.name
+                # Use the existing test_output.wav file in the root directory
+                dummy_audio_path = "test_output.wav"
                 
                 # Run dummy inference to warm up
                 result = subprocess.run(
@@ -40,7 +37,7 @@ class BaoAgentService:
                     ],
                     capture_output=True, text=True, timeout=120
                 )
-                os.unlink(dummy_audio_path)
+                # Don't delete the file since we want to keep it
                 self.stt_warmed_up = True
                 print("STT model warmed up successfully!")
             except Exception as e:
@@ -54,14 +51,11 @@ class BaoAgentService:
             print("Warming up TTS model...")
             print(f"Using TTS script: delayed-streams-modeling/scripts/tts_mlx.py")
             try:
-                # Create a dummy text file
-                with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as tf:
-                    tf.write("Hello")
-                    tf.flush()
-                    text_path = tf.name
+                # Use the existing stt_input.txt file in the root directory
+                text_path = "stt_input.txt"
                 
-                with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp_file:
-                    output_path = tmp_file.name
+                # Use the existing tts_output.wav file in the root directory
+                output_path = "tts_output.wav"
                 
                 # Build the command using the tts_mlx.py script
                 cmd = [
@@ -76,8 +70,7 @@ class BaoAgentService:
                 print("TTS warmup command completed successfully")
                 print(f"TTS stdout: {result.stdout}")
                 
-                os.unlink(text_path)
-                os.unlink(output_path)
+                # Don't delete the files since we want to keep them
                 self.tts_warmed_up = True
                 print("TTS model warmed up successfully!")
             except subprocess.CalledProcessError as e:
@@ -98,10 +91,9 @@ class BaoAgentService:
             if not self.warmup_stt():
                 return None
         
-        # Save audio to a temporary WAV file
-        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp_file:
-            sf.write(tmp_file.name, audio_data, sample_rate)
-            audio_path = tmp_file.name
+        # Save audio to the existing test_output.wav file in the root directory
+        audio_path = "test_output.wav"
+        sf.write(audio_path, audio_data, sample_rate)
         
         try:
             # Run the STT model
@@ -145,8 +137,7 @@ class BaoAgentService:
         except Exception as e:
             print(f"STT inference failed: {e}")
             return None
-        finally:
-            os.unlink(audio_path)
+        
     
     def text_to_speech(self, text):
         """Generate speech from text using the warmed up TTS model."""
@@ -156,14 +147,14 @@ class BaoAgentService:
         
         print(f"Generating TTS for text: '{text[:50]}{'...' if len(text) > 50 else ''}'")
         
-        # Save text to temporary file
-        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as tf:
+        # Write text to the existing stt_input.txt file in the root directory
+        text_path = "stt_input.txt"
+        with open(text_path, "w") as tf:
             tf.write(text)
             tf.flush()
-            text_path = tf.name
         
-        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp_file:
-            output_path = tmp_file.name
+        # Use the existing tts_output.wav file in the root directory
+        output_path = "tts_output.wav"
         
         try:
             # Build the command using the tts_mlx.py script
@@ -194,9 +185,6 @@ class BaoAgentService:
         except Exception as e:
             print(f"TTS inference failed: {e}")
             return None
-        finally:
-            os.unlink(text_path)
-            os.unlink(output_path)
     
     def process_command(self, command_data):
         """Process a JSON command and return the result."""
@@ -260,57 +248,12 @@ class BaoAgentService:
                 'error': str(e)
             })
 
-    def debug_tts_models(self):
-        """Debug method to test the TTS script."""
-        print("\n=== TTS Script Debug ===")
-        
-        try:
-            # Create a dummy text file
-            with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as tf:
-                tf.write("Hello")
-                tf.flush()
-                text_path = tf.name
-            
-            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp_file:
-                output_path = tmp_file.name
-            
-            # Test the tts_mlx.py script
-            cmd = [
-                "python3", "delayed-streams-modeling/scripts/tts_mlx.py",
-                text_path, output_path, "--quantize", "8"
-            ]
-            print(f"Testing command: {' '.join(cmd)}")
-            
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-            
-            if result.returncode == 0:
-                print(f"✓ TTS script - SUCCESS")
-                if os.path.exists(output_path):
-                    print(f"  Generated audio file: {output_path}")
-            else:
-                print(f"✗ TTS script - FAILED")
-                print(f"  Return code: {result.returncode}")
-                print(f"  Stderr: {result.stderr[:200]}...")
-            
-            # Cleanup
-            os.unlink(text_path)
-            if os.path.exists(output_path):
-                os.unlink(output_path)
-                
-        except Exception as e:
-            print(f"✗ TTS script - ERROR: {e}")
-        
-        print("\n=== TTS Debug Complete ===")
-
 def main():
     """Main service loop."""
     service = BaoAgentService()
     
     print("BaoAgent Service starting...")
     print("Commands: transcribe, tts, status, quit")
-    
-    # Debug TTS models first
-    service.debug_tts_models()
     
     # Warm up both models on startup
     print("Warming up models...")
