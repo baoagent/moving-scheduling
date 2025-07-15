@@ -1,12 +1,4 @@
-fastapi
-librosa
 numpy
-openai-whisper
-python-multipart
-scipy
 soundfile
-torch
-torchaudio
-uvicorn
-websockets
+librosa
 moshi-mlx
