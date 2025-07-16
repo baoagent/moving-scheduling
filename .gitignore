@@ -1,3 +1,5 @@
 venv/
 .env
+mcp-server/venv
+mcp-server/.env
 __pycache__
